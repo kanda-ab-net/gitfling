@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GitFling</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+  </head>
+  <body>
+    <!-- 背景の装飾ブロブ（Liquid Glassの下地） -->
+    <div class="bg-blobs" aria-hidden="true">
+      <span class="blob blob-a"></span>
+      <span class="blob blob-b"></span>
+      <span class="blob blob-c"></span>
+    </div>
+
+    <div id="app">
+      <!-- タイトルバー -->
+      <header class="titlebar" data-tauri-drag-region>
+        <div class="titlebar-title" data-tauri-drag-region>
+          <span class="app-mark">⇅</span> GitFling
+        </div>
+        <div class="titlebar-profile">
+          <select id="profileSelect" class="glass-input" title="サーバープロファイル"></select>
+          <button id="addProfileBtn" class="glass-btn icon-btn" title="プロファイルを追加">＋</button>
+          <button id="editProfileBtn" class="glass-btn icon-btn" title="プロファイルを編集">✎</button>
+        </div>
+      </header>
+
+      <!-- ツールバー -->
+      <div class="toolbar glass-panel">
+        <button id="pickRepoBtn" class="glass-btn">📁 リポジトリを選択</button>
+        <span id="repoPath" class="repo-path">未選択</span>
+        <span class="spacer"></span>
+        <span id="branchBadge" class="badge" hidden></span>
+        <button id="refreshBtn" class="glass-btn" disabled>↻ 更新</button>
+        <button id="connectBtn" class="glass-btn" disabled>🔌 接続</button>
+        <div class="menu-wrap">
+          <button id="moreBtn" class="glass-btn" disabled title="git-ftp init / catchup">⋯</button>
+          <div class="menu glass-panel-strong" id="moreMenu" hidden>
+            <button class="menu-item" id="initBtn">
+              <span class="menu-emoji">🚀</span>
+              <span class="menu-text">
+                <strong>init</strong>
+                <small>HEADの全ファイルを初回アップロード</small>
+              </span>
+            </button>
+            <button class="menu-item" id="catchupBtn">
+              <span class="menu-emoji">✓</span>
+              <span class="menu-text">
+                <strong>catchup</strong>
+                <small>アップロードせず現在の状態を記録</small>
+              </span>
+            </button>
+          </div>
+        </div>
+        <button id="deployBtn" class="glass-btn primary" disabled>⇧ アップロード</button>
+      </div>
+
+      <!-- メイン: 左=ローカル差分 / 右=リモートツリー -->
+      <main class="panes">
+        <section class="pane glass-panel" id="localPane">
+          <div class="pane-head">
+            <h2>ローカルの差分</h2>
+            <div class="pane-head-right">
+              <span id="deployedHash" class="mini-badge" title="サーバーに記録された最終デプロイ">—</span>
+              <label class="chk"><input type="checkbox" id="selectAll" /> 全選択</label>
+            </div>
+          </div>
+          <div class="pane-body" id="diffList">
+            <div class="empty-state">
+              <div class="empty-emoji">📂</div>
+              <p>リポジトリを選択してください</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="pane glass-panel" id="remotePane">
+          <div class="pane-head">
+            <h2>リモートサーバー</h2>
+            <div class="pane-head-right">
+              <span id="remoteStatus" class="mini-badge">未接続</span>
+            </div>
+          </div>
+          <div class="pane-body" id="remoteTree">
+            <div class="empty-state">
+              <div class="empty-emoji">🌐</div>
+              <p>サーバーに接続してください</p>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <!-- ステータスバー -->
+      <footer class="statusbar glass-panel">
+        <span id="statusText">準備完了</span>
+        <span class="spacer"></span>
+        <div class="progress" id="progressWrap" hidden>
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
+      </footer>
+    </div>
+
+    <!-- プロファイル編集モーダル -->
+    <div class="modal-backdrop" id="profileModal" hidden>
+      <div class="modal glass-panel-strong">
+        <h3 id="modalTitle">サーバープロファイル</h3>
+        <div class="form-grid">
+          <label>名前<input id="f_name" class="glass-input" placeholder="本番サーバー" /></label>
+          <label>プロトコル
+            <select id="f_protocol" class="glass-input">
+              <option value="ftp">FTP</option>
+              <option value="ftps">FTPS (明示的TLS)</option>
+              <option value="sftp">SFTP (SSH)</option>
+            </select>
+          </label>
+          <label>ホスト<input id="f_host" class="glass-input" placeholder="example.com" /></label>
+          <label>ポート<input id="f_port" class="glass-input" type="number" placeholder="21" /></label>
+          <label>ユーザー<input id="f_user" class="glass-input" placeholder="user" /></label>
+          <label>パスワード<input id="f_pass" class="glass-input" type="password" placeholder="••••••" /></label>
+          <label class="full">リモートのルートパス
+            <div class="input-with-btn">
+              <input id="f_remote" class="glass-input" placeholder="/public_html" />
+              <button type="button" id="browseRemoteBtn" class="glass-btn">参照…</button>
+            </div>
+          </label>
+        </div>
+        <p class="modal-note">パスワードはこの端末のローカル設定ファイルに保存されます。</p>
+        <div class="modal-actions">
+          <button id="deleteProfileBtn" class="glass-btn danger">削除</button>
+          <span class="spacer"></span>
+          <button id="cancelProfileBtn" class="glass-btn">キャンセル</button>
+          <button id="saveProfileBtn" class="glass-btn primary">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- リモートディレクトリ選択モーダル -->
+    <div class="modal-backdrop" id="pickerModal" hidden>
+      <div class="modal glass-panel-strong picker">
+        <h3>リモートフォルダを選択</h3>
+        <div class="picker-path" id="pickerPath">/</div>
+        <div class="picker-body" id="pickerList">
+          <div class="tree-loading">読み込み中…</div>
+        </div>
+        <div class="modal-actions">
+          <button id="pickerUpBtn" class="glass-btn">↑ 上へ</button>
+          <span class="spacer"></span>
+          <button id="pickerCancelBtn" class="glass-btn">キャンセル</button>
+          <button id="pickerSelectBtn" class="glass-btn primary">このフォルダを選択</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/ui/main.js"></script>
+  </body>
+</html>
