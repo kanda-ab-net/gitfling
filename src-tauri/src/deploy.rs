@@ -54,15 +54,27 @@ pub fn test_connection(profile: &Profile) -> Result<(), String> {
     Ok(())
 }
 
+/// ローカルの同期ベースフォルダ（"/" 起点の相対パス）を repo_path に結合した実ディレクトリを返す。
+fn local_base(repo_path: &str, local_root: &str) -> std::path::PathBuf {
+    let rel = local_root.trim_matches('/');
+    if rel.is_empty() {
+        Path::new(repo_path).to_path_buf()
+    } else {
+        Path::new(repo_path).join(rel)
+    }
+}
+
 /// 選択されたファイルをアップロード / 削除し、最後に .git-ftp.log を更新する。
 pub fn deploy(
     app: &AppHandle,
     profile: &Profile,
     repo_path: &str,
+    local_root: &str,
     files: &[DeployFile],
     head_hash: &str,
 ) -> Result<DeployResult, String> {
     let mut conn = remote::connect(profile)?;
+    let base = local_base(repo_path, local_root);
     let total = files.len();
     let mut uploaded = 0;
     let mut deleted = 0;
@@ -85,7 +97,7 @@ pub fn deploy(
             deleted += 1;
         } else {
             // ローカル（作業ツリー）のファイル内容をアップロード
-            let local_path = Path::new(repo_path).join(&f.path);
+            let local_path = base.join(&f.path);
             let data = std::fs::read(&local_path)
                 .map_err(|e| format!("{} を読めません: {e}", f.path))?;
             // 親ディレクトリを用意
@@ -108,18 +120,20 @@ pub fn init(
     app: &AppHandle,
     profile: &Profile,
     repo_path: &str,
+    local_root: &str,
     files: &[String],
     head_hash: &str,
 ) -> Result<DeployResult, String> {
+    let base = local_base(repo_path, local_root);
     let deploy_files: Vec<DeployFile> = files
         .iter()
-        .filter(|p| Path::new(repo_path).join(p).is_file())
+        .filter(|p| base.join(p).is_file())
         .map(|p| DeployFile {
             path: p.clone(),
             status: "A".to_string(),
         })
         .collect();
-    deploy(app, profile, repo_path, &deploy_files, head_hash)
+    deploy(app, profile, repo_path, local_root, &deploy_files, head_hash)
 }
 
 /// git ftp catchup 相当。アップロードは行わず、.git-ftp.log に現在のHEADを記録するだけ。

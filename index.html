@@ -29,7 +29,7 @@
 
       <!-- ツールバー -->
       <div class="toolbar glass-panel">
-        <button id="pickRepoBtn" class="glass-btn">📁 リポジトリを選択</button>
+        <span class="repo-label">📁 リポジトリ:</span>
         <span id="repoPath" class="repo-path">未選択</span>
         <span class="spacer"></span>
         <span id="branchBadge" class="badge" hidden></span>
@@ -63,6 +63,7 @@
           <div class="pane-head">
             <h2>ローカルの差分</h2>
             <div class="pane-head-right">
+              <span id="localRootBadge" class="mini-badge" title="現在の同期起点ローカルフォルダ">—</span>
               <span id="deployedHash" class="mini-badge" title="サーバーに記録された最終デプロイ">—</span>
               <label class="chk"><input type="checkbox" id="selectAll" /> 全選択</label>
             </div>
@@ -70,7 +71,7 @@
           <div class="pane-body" id="diffList">
             <div class="empty-state">
               <div class="empty-emoji">📂</div>
-              <p>リポジトリを選択してください</p>
+              <p>プロファイルでローカルGitリポジトリを設定してください</p>
             </div>
           </div>
         </section>
@@ -118,6 +119,18 @@
           <label>ポート<input id="f_port" class="glass-input" type="number" placeholder="21" /></label>
           <label>ユーザー<input id="f_user" class="glass-input" placeholder="user" /></label>
           <label>パスワード<input id="f_pass" class="glass-input" type="password" placeholder="••••••" /></label>
+          <label class="full">ローカルGitリポジトリ
+            <div class="input-with-btn">
+              <input id="f_repo" class="glass-input" placeholder="/path/to/repo" />
+              <button type="button" id="pickRepoBtn" class="glass-btn">選択…</button>
+            </div>
+          </label>
+          <label class="full">ローカルの同期ベースフォルダ
+            <div class="input-with-btn">
+              <input id="f_local" class="glass-input" placeholder="/ (リポジトリ直下)" />
+              <button type="button" id="browseLocalBtn" class="glass-btn">参照…</button>
+            </div>
+          </label>
           <label class="full">リモートのルートパス
             <div class="input-with-btn">
               <input id="f_remote" class="glass-input" placeholder="/public_html" />
@@ -125,7 +138,12 @@
             </div>
           </label>
         </div>
-        <p class="modal-note">パスワードはこの端末のローカル設定ファイルに保存されます。</p>
+        <p class="modal-note">
+          パスワードはこの端末のローカル設定ファイルに保存されます。<br />
+          「ローカルGitリポジトリ」「ローカルの同期ベースフォルダ」「リモートのルートパス」はプロファイルごとに保存されます。<br />
+          「ローカルの同期ベースフォルダ」を指定すると、リポジトリ内のそのフォルダ配下だけが差分・デプロイの対象になり、
+          パスはそのフォルダを起点にリモートのルートパスへ配置されます（例: <code>wp-content</code> を指定）。
+        </p>
         <div class="modal-actions">
           <button id="deleteProfileBtn" class="glass-btn danger">削除</button>
           <span class="spacer"></span>
@@ -138,7 +156,7 @@
     <!-- リモートディレクトリ選択モーダル -->
     <div class="modal-backdrop" id="pickerModal" hidden>
       <div class="modal glass-panel-strong picker">
-        <h3>リモートフォルダを選択</h3>
+        <h3 id="pickerTitle">リモートフォルダを選択</h3>
         <div class="picker-path" id="pickerPath">/</div>
         <div class="picker-body" id="pickerList">
           <div class="tree-loading">読み込み中…</div>

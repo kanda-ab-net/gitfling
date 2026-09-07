@@ -4,7 +4,7 @@ mod profiles;
 mod remote;
 
 use deploy::{DeployFile, DeployResult};
-use git::GitStatus;
+use git::{GitStatus, LocalDirEntry};
 use profiles::Profile;
 use remote::RemoteEntry;
 use tauri::AppHandle;
@@ -36,8 +36,20 @@ async fn delete_profile(id: String) -> Result<(), String> {
 async fn git_status(
     repo_path: String,
     deployed_hash: Option<String>,
+    local_root: String,
 ) -> Result<GitStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || git::status(&repo_path, deployed_hash))
+    tauri::async_runtime::spawn_blocking(move || {
+        git::status(&repo_path, deployed_hash, &local_root)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// プロファイルの「ローカルの同期ベースフォルダ」を GUI で選ぶダイアログ用。
+/// repo_path 配下の path にあるサブディレクトリ一覧（ディレクトリのみ）を返す。
+#[tauri::command]
+async fn local_browse(repo_path: String, path: String) -> Result<Vec<LocalDirEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || git::local_browse(&repo_path, &path))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -94,12 +106,13 @@ async fn deploy(
     app: AppHandle,
     id: String,
     repo_path: String,
+    local_root: String,
     files: Vec<DeployFile>,
     head_hash: String,
 ) -> Result<DeployResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let profile = profiles::find(&id)?;
-        deploy::deploy(&app, &profile, &repo_path, &files, &head_hash)
+        deploy::deploy(&app, &profile, &repo_path, &local_root, &files, &head_hash)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -107,8 +120,8 @@ async fn deploy(
 
 /// init の確認ダイアログ用に、アップロード対象（HEADの全追跡ファイル）の一覧を返す。
 #[tauri::command]
-async fn git_tracked_files(repo_path: String) -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || git::tracked_files(&repo_path))
+async fn git_tracked_files(repo_path: String, local_root: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || git::tracked_files(&repo_path, &local_root))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -119,12 +132,13 @@ async fn git_ftp_init(
     app: AppHandle,
     id: String,
     repo_path: String,
+    local_root: String,
 ) -> Result<DeployResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let profile = profiles::find(&id)?;
         let head = git::head_hash(&repo_path)?;
-        let files = git::tracked_files(&repo_path)?;
-        deploy::init(&app, &profile, &repo_path, &files, &head)
+        let files = git::tracked_files(&repo_path, &local_root)?;
+        deploy::init(&app, &profile, &repo_path, &local_root, &files, &head)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -152,6 +166,7 @@ pub fn run() {
             save_profile,
             delete_profile,
             git_status,
+            local_browse,
             remote_connect_test,
             remote_list,
             remote_browse,

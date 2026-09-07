@@ -20,7 +20,6 @@ const el = {
   profileSelect: $("profileSelect"),
   addProfileBtn: $("addProfileBtn"),
   editProfileBtn: $("editProfileBtn"),
-  pickRepoBtn: $("pickRepoBtn"),
   repoPath: $("repoPath"),
   branchBadge: $("branchBadge"),
   refreshBtn: $("refreshBtn"),
@@ -32,6 +31,7 @@ const el = {
   catchupBtn: $("catchupBtn"),
   diffList: $("diffList"),
   remoteTree: $("remoteTree"),
+  localRootBadge: $("localRootBadge"),
   deployedHash: $("deployedHash"),
   remoteStatus: $("remoteStatus"),
   selectAll: $("selectAll"),
@@ -47,13 +47,18 @@ const el = {
   f_port: $("f_port"),
   f_user: $("f_user"),
   f_pass: $("f_pass"),
+  f_repo: $("f_repo"),
+  f_local: $("f_local"),
   f_remote: $("f_remote"),
   saveProfileBtn: $("saveProfileBtn"),
   cancelProfileBtn: $("cancelProfileBtn"),
   deleteProfileBtn: $("deleteProfileBtn"),
+  pickRepoBtn: $("pickRepoBtn"),
+  browseLocalBtn: $("browseLocalBtn"),
   browseRemoteBtn: $("browseRemoteBtn"),
   // ディレクトリ選択
   pickerModal: $("pickerModal"),
+  pickerTitle: $("pickerTitle"),
   pickerPath: $("pickerPath"),
   pickerList: $("pickerList"),
   pickerUpBtn: $("pickerUpBtn"),
@@ -120,6 +125,61 @@ function currentProfile() {
   return state.profiles.find((p) => p.id === state.currentProfileId) || null;
 }
 
+function currentLocalRoot() {
+  return currentProfile()?.local_root || "/";
+}
+
+// 選択中プロファイルの repo_path を state / ツールバー表示に反映する
+function syncRepoPathFromProfile() {
+  const prof = currentProfile();
+  state.repoPath = prof?.repo_path || null;
+  el.repoPath.textContent = state.repoPath || "未選択";
+  el.repoPath.setAttribute("title", state.repoPath || "");
+}
+
+// プロファイル一覧・選択状態が変わった後に呼ぶ。repoPath を同期し、Git差分を再計算する。
+async function refreshLocalView() {
+  syncRepoPathFromProfile();
+  if (state.repoPath) {
+    await refreshGit();
+  } else {
+    state.files = [];
+    el.branchBadge.hidden = true;
+    renderDiff();
+    updateLocalRootBadge();
+    updateButtons();
+  }
+}
+
+// repoPath と local_root（"/" 起点の相対パス）から実際のローカルパスを組み立てる
+function resolveLocalPath(repoPath, localRoot) {
+  const rel = (localRoot || "/").replace(/^\/+|\/+$/g, "");
+  return rel ? joinPath(repoPath, rel) : repoPath;
+}
+
+// 「ローカルの差分」ペインに、現在の同期起点フォルダを表示する
+function updateLocalRootBadge() {
+  if (!state.repoPath) {
+    el.localRootBadge.textContent = "—";
+    el.localRootBadge.title = "現在の同期起点ローカルフォルダ";
+    return;
+  }
+  const root = currentLocalRoot();
+  const abs = resolveLocalPath(state.repoPath, root);
+  el.localRootBadge.textContent =
+    root === "/" ? "起点: /（リポジトリ直下）" : `起点: ${root}`;
+  el.localRootBadge.title = abs;
+}
+
+// ローカル参照はリポジトリ選択済みでないと使えないため、未選択なら無効化して分かるようにする
+function updateBrowseLocalBtnState() {
+  const hasRepo = !!el.f_repo.value.trim();
+  el.browseLocalBtn.disabled = !hasRepo;
+  el.browseLocalBtn.title = hasRepo
+    ? ""
+    : "先に「ローカルGitリポジトリ」を選択してください";
+}
+
 function openProfileModal(profile) {
   state.editingProfileId = profile ? profile.id : null;
   el.modalTitle.textContent = profile ? "プロファイルを編集" : "新規プロファイル";
@@ -129,8 +189,11 @@ function openProfileModal(profile) {
   el.f_port.value = profile?.port ?? "";
   el.f_user.value = profile?.user ?? "";
   el.f_pass.value = profile?.password ?? "";
+  el.f_repo.value = profile?.repo_path ?? "";
+  el.f_local.value = profile?.local_root ?? "/";
   el.f_remote.value = profile?.remote_root ?? "/";
   el.deleteProfileBtn.hidden = !profile;
+  updateBrowseLocalBtnState();
   el.modal.hidden = false;
   el.f_name.focus();
 }
@@ -150,6 +213,8 @@ async function saveProfile() {
     port: parseInt(el.f_port.value, 10) || defaultPort(proto),
     user: el.f_user.value.trim(),
     password: el.f_pass.value,
+    repo_path: el.f_repo.value.trim(),
+    local_root: el.f_local.value.trim() || "/",
     remote_root: el.f_remote.value.trim() || "/",
   };
   if (!profile.host) {
@@ -161,6 +226,7 @@ async function saveProfile() {
     state.currentProfileId = saved.id;
     el.modal.hidden = true;
     await loadProfiles();
+    await refreshLocalView();
     setStatus("プロファイルを保存しました", "ok");
   } catch (e) {
     setStatus(`保存に失敗: ${e}`, "error");
@@ -174,14 +240,17 @@ async function deleteProfile() {
     el.modal.hidden = true;
     state.connected = false;
     await loadProfiles();
+    await refreshLocalView();
     setStatus("プロファイルを削除しました");
   } catch (e) {
     setStatus(`削除に失敗: ${e}`, "error");
   }
 }
 
-// ---------- リモートフォルダ選択（参照…） ----------
+// ---------- フォルダ選択（参照…／リモート・ローカル共用） ----------
 let pickerCurrentPath = "/";
+let pickerMode = "remote"; // "remote" | "local"
+let pickerRepoPath = ""; // ローカル参照時に対象とするリポジトリ（モーダル入力中の値）
 
 // 入力中のフォーム値から一時プロファイルを作る（未保存でも接続できるように）
 function formProfile() {
@@ -194,18 +263,39 @@ function formProfile() {
     port: parseInt(el.f_port.value, 10) || defaultPort(proto),
     user: el.f_user.value.trim(),
     password: el.f_pass.value,
+    local_root: "/",
     remote_root: "/",
   };
 }
 
-async function openPicker() {
+async function openRemotePicker() {
   const prof = formProfile();
   if (!prof.host) {
-    setStatus("参照するにはホストを入力してください", "error");
+    // モーダル背面のステータスバーは見えないため alert で確実に伝える
+    window.alert("参照するにはホストを入力してください");
     return;
   }
+  pickerMode = "remote";
+  el.pickerTitle.textContent = "リモートフォルダを選択";
   // 現在入力されているパスから開始（空なら /）
   pickerCurrentPath = el.f_remote.value.trim() || "/";
+  if (!pickerCurrentPath.startsWith("/")) pickerCurrentPath = "/" + pickerCurrentPath;
+  el.pickerModal.hidden = false;
+  await loadPicker();
+}
+
+async function openLocalPicker() {
+  const repoPath = el.f_repo.value.trim();
+  if (!repoPath) {
+    // ボタンは通常この状態で無効化されるが、念のためのフォールバック
+    window.alert("参照するには先に「ローカルGitリポジトリ」を選択してください");
+    return;
+  }
+  pickerRepoPath = repoPath;
+  pickerMode = "local";
+  el.pickerTitle.textContent = "ローカルの同期ベースフォルダを選択";
+  // 現在入力されているパスから開始（空なら /）
+  pickerCurrentPath = el.f_local.value.trim() || "/";
   if (!pickerCurrentPath.startsWith("/")) pickerCurrentPath = "/" + pickerCurrentPath;
   el.pickerModal.hidden = false;
   await loadPicker();
@@ -214,12 +304,17 @@ async function openPicker() {
 async function loadPicker() {
   el.pickerPath.textContent = pickerCurrentPath;
   el.pickerList.innerHTML = `<div class="tree-loading">読み込み中…</div>`;
-  const prof = formProfile();
   try {
-    const dirs = await invoke("remote_browse", {
-      profile: prof,
-      path: pickerCurrentPath,
-    });
+    const dirs =
+      pickerMode === "remote"
+        ? await invoke("remote_browse", {
+            profile: formProfile(),
+            path: pickerCurrentPath,
+          })
+        : await invoke("local_browse", {
+            repoPath: pickerRepoPath,
+            path: pickerCurrentPath,
+          });
     el.pickerList.innerHTML = "";
     if (dirs.length === 0) {
       el.pickerList.innerHTML = `<div class="picker-empty">（サブフォルダはありません）</div>`;
@@ -236,7 +331,7 @@ async function loadPicker() {
       el.pickerList.appendChild(row);
     }
   } catch (e) {
-    el.pickerList.innerHTML = `<div class="picker-empty" style="color:var(--danger)">接続/一覧エラー: ${e}</div>`;
+    el.pickerList.innerHTML = `<div class="picker-empty" style="color:var(--danger)">一覧エラー: ${e}</div>`;
   }
 }
 
@@ -246,23 +341,28 @@ function pickerUp() {
 }
 
 function pickerSelect() {
-  el.f_remote.value = pickerCurrentPath;
+  if (pickerMode === "remote") {
+    el.f_remote.value = pickerCurrentPath;
+    setStatus(`リモートのルートパスを ${pickerCurrentPath} に設定しました`, "ok");
+  } else {
+    el.f_local.value = pickerCurrentPath;
+    setStatus(`ローカルの同期ベースフォルダを ${pickerCurrentPath} に設定しました`, "ok");
+  }
   el.pickerModal.hidden = true;
-  setStatus(`ルートパスを ${pickerCurrentPath} に設定しました`, "ok");
 }
 
 // ---------- リポジトリ / Git ----------
-async function pickRepo() {
+// プロファイル編集モーダル内の「ローカルGitリポジトリ」選択（保存するまでは state.repoPath には反映しない）
+async function pickRepoInModal() {
   const selected = await open({ directory: true, title: "Gitリポジトリを選択" });
   if (!selected) return;
-  state.repoPath = selected;
-  el.repoPath.textContent = selected;
-  el.repoPath.setAttribute("title", selected);
-  await refreshGit();
+  el.f_repo.value = selected;
+  updateBrowseLocalBtnState();
 }
 
 async function refreshGit() {
   if (!state.repoPath) return;
+  updateLocalRootBadge();
   setStatus("Git差分を計算中…");
   try {
     // 先にサーバーの最終デプロイハッシュを取得（接続済みなら）
@@ -278,6 +378,7 @@ async function refreshGit() {
     const res = await invoke("git_status", {
       repoPath: state.repoPath,
       deployedHash: state.deployedHash,
+      localRoot: currentLocalRoot(),
     });
     state.branch = res.branch;
     state.head = res.head;
@@ -479,6 +580,7 @@ async function deploy() {
     const result = await invoke("deploy", {
       id: prof.id,
       repoPath: state.repoPath,
+      localRoot: currentLocalRoot(),
       files: selected.map((f) => ({ path: f.path, status: f.status })),
       headHash: state.head,
     });
@@ -514,6 +616,7 @@ async function gitFtpInit() {
   try {
     const files = await invoke("git_tracked_files", {
       repoPath: state.repoPath,
+      localRoot: currentLocalRoot(),
     });
     count = files.length;
   } catch (e) {
@@ -541,6 +644,7 @@ async function gitFtpInit() {
     const result = await invoke("git_ftp_init", {
       id: prof.id,
       repoPath: state.repoPath,
+      localRoot: currentLocalRoot(),
     });
     setStatus(`init 完了: ${result.uploaded} ファイルをアップロード`, "ok");
     await refreshGit();
@@ -617,7 +721,7 @@ function updateButtons() {
 }
 
 // ---------- イベント配線 ----------
-el.pickRepoBtn.addEventListener("click", pickRepo);
+el.pickRepoBtn.addEventListener("click", pickRepoInModal);
 el.refreshBtn.addEventListener("click", refreshGit);
 el.connectBtn.addEventListener("click", connectRemote);
 el.deployBtn.addEventListener("click", deploy);
@@ -635,13 +739,14 @@ el.addProfileBtn.addEventListener("click", () => openProfileModal(null));
 el.editProfileBtn.addEventListener("click", () =>
   openProfileModal(currentProfile())
 );
-el.profileSelect.addEventListener("change", () => {
+el.profileSelect.addEventListener("change", async () => {
   state.currentProfileId = el.profileSelect.value;
   state.connected = false;
   el.remoteStatus.textContent = "未接続";
   el.remoteStatus.style.color = "var(--text-dim)";
   el.remoteTree.innerHTML = `<div class="empty-state"><div class="empty-emoji">🌐</div><p>サーバーに接続してください</p></div>`;
-  updateButtons();
+  // プロファイルごとにリポジトリ・同期ベースフォルダが異なるため、repoPath を同期して差分を再計算する
+  await refreshLocalView();
 });
 el.selectAll.addEventListener("change", () => {
   const checked = el.selectAll.checked;
@@ -658,8 +763,9 @@ el.f_protocol.addEventListener("change", () => {
 el.modal.addEventListener("click", (e) => {
   if (e.target === el.modal) el.modal.hidden = true;
 });
-// リモートフォルダ選択
-el.browseRemoteBtn.addEventListener("click", openPicker);
+// フォルダ選択（ローカル / リモート）
+el.browseLocalBtn.addEventListener("click", openLocalPicker);
+el.browseRemoteBtn.addEventListener("click", openRemotePicker);
 el.pickerUpBtn.addEventListener("click", pickerUp);
 el.pickerSelectBtn.addEventListener("click", pickerSelect);
 el.pickerCancelBtn.addEventListener("click", () => (el.pickerModal.hidden = true));
@@ -670,5 +776,6 @@ el.pickerModal.addEventListener("click", (e) => {
 // ---------- 初期化 ----------
 (async function init() {
   await loadProfiles();
+  await refreshLocalView();
   setStatus("準備完了");
 })();

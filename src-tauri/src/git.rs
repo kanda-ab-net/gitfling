@@ -58,9 +58,20 @@ fn status_char(d: Delta) -> &'static str {
     }
 }
 
+/// ローカル同期ベースフォルダの指定（"/" や空文字はリポジトリルートを意味する）を
+/// 「先頭・末尾スラッシュなしの相対パス」に正規化する。結果が空文字ならスコープなし。
+fn normalize_local_root(local_root: &str) -> String {
+    local_root.trim_matches('/').to_string()
+}
+
 /// deployed_hash（サーバーの .git-ftp.log にある最終デプロイコミット）から HEAD までの差分。
 /// deployed_hash が None または不正な場合は、HEAD の全追跡ファイルを「追加」として返す（初回デプロイ）。
-pub fn status(repo_path: &str, deployed_hash: Option<String>) -> Result<GitStatus, String> {
+/// local_root が指定されている場合、そのフォルダ配下のみを対象にし、返すパスはそのフォルダからの相対パスにする。
+pub fn status(
+    repo_path: &str,
+    deployed_hash: Option<String>,
+    local_root: &str,
+) -> Result<GitStatus, String> {
     let repo = Repository::open(repo_path).map_err(|e| format!("リポジトリを開けません: {e}"))?;
 
     let head_ref = repo.head().map_err(|e| format!("HEADを取得できません: {e}"))?;
@@ -80,8 +91,18 @@ pub fn status(repo_path: &str, deployed_hash: Option<String>) -> Result<GitStatu
         _ => None,
     };
 
+    let root = normalize_local_root(local_root);
+    let prefix = if root.is_empty() {
+        String::new()
+    } else {
+        format!("{root}/")
+    };
+
     let mut opts = DiffOptions::new();
     opts.include_typechange(true);
+    if !root.is_empty() {
+        opts.pathspec(&root);
+    }
     let diff = repo
         .diff_tree_to_tree(old_tree.as_ref(), Some(&head_tree), Some(&mut opts))
         .map_err(|e| format!("差分を計算できません: {e}"))?;
@@ -102,15 +123,23 @@ pub fn status(repo_path: &str, deployed_hash: Option<String>) -> Result<GitStatu
             delta.new_file().path()
         };
         if let Some(p) = path {
-            let path = p.to_string_lossy().replace('\\', "/");
-            if is_ignored(&ignore, &path) {
+            let full_path = p.to_string_lossy().replace('\\', "/");
+            if is_ignored(&ignore, &full_path) {
                 ignored += 1;
                 continue;
             }
+            // local_root 配下のパスのみを対象にし、返すパスはそこからの相対パスにする
+            let rel_path = if prefix.is_empty() {
+                full_path.clone()
+            } else if let Some(stripped) = full_path.strip_prefix(prefix.as_str()) {
+                stripped.to_string()
+            } else {
+                continue;
+            };
             // 削除ファイルは実体をアップロードしないので dirty 判定の対象外
-            let is_dirty = status != "D" && dirty.contains(&path);
+            let is_dirty = status != "D" && dirty.contains(&full_path);
             files.push(FileChange {
-                path,
+                path: rel_path,
                 status: status.to_string(),
                 dirty: is_dirty,
             });
@@ -138,7 +167,8 @@ pub fn head_hash(repo_path: &str) -> Result<String, String> {
 }
 
 /// HEAD時点の全追跡ファイル（ブロブ）のパス一覧。init（初回全アップロード）で使う。
-pub fn tracked_files(repo_path: &str) -> Result<Vec<String>, String> {
+/// local_root が指定されている場合、そのフォルダ配下のみを対象にし、返すパスはそのフォルダからの相対パスにする。
+pub fn tracked_files(repo_path: &str, local_root: &str) -> Result<Vec<String>, String> {
     let repo = Repository::open(repo_path).map_err(|e| format!("リポジトリを開けません: {e}"))?;
     let tree = repo
         .head()
@@ -148,15 +178,26 @@ pub fn tracked_files(repo_path: &str) -> Result<Vec<String>, String> {
 
     // .git-ftp-ignore による除外を初回アップロードでも尊重する
     let ignore = load_ignore(repo_path);
+    let root = normalize_local_root(local_root);
+    let prefix = if root.is_empty() {
+        String::new()
+    } else {
+        format!("{root}/")
+    };
 
     let mut files = Vec::new();
     tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
         if entry.kind() == Some(git2::ObjectType::Blob) {
             let name = entry.name().unwrap_or("");
             // dir は "src/" のように末尾スラッシュ付き、ルート直下は ""
-            let path = format!("{dir}{name}").replace('\\', "/");
-            if !is_ignored(&ignore, &path) {
-                files.push(path);
+            let full_path = format!("{dir}{name}").replace('\\', "/");
+            if is_ignored(&ignore, &full_path) {
+                return git2::TreeWalkResult::Ok;
+            }
+            if prefix.is_empty() {
+                files.push(full_path);
+            } else if let Some(stripped) = full_path.strip_prefix(prefix.as_str()) {
+                files.push(stripped.to_string());
             }
         }
         git2::TreeWalkResult::Ok
@@ -165,6 +206,46 @@ pub fn tracked_files(repo_path: &str) -> Result<Vec<String>, String> {
 
     files.sort();
     Ok(files)
+}
+
+/// ローカルディレクトリのエントリ（サブフォルダのみ）。プロファイルの
+/// 「ローカルの同期ベースフォルダ」を選ぶ GUI ダイアログ用。
+#[derive(Debug, Serialize)]
+pub struct LocalDirEntry {
+    pub name: String,
+    pub path: String,
+}
+
+/// repo_path 配下の path（"/" 起点の相対パス）にあるサブディレクトリ一覧を返す。
+pub fn local_browse(repo_path: &str, path: &str) -> Result<Vec<LocalDirEntry>, String> {
+    let rel = path.trim_matches('/');
+    let dir = if rel.is_empty() {
+        Path::new(repo_path).to_path_buf()
+    } else {
+        Path::new(repo_path).join(rel)
+    };
+    let read_dir = std::fs::read_dir(&dir).map_err(|e| format!("フォルダを読めません: {e}"))?;
+
+    let mut entries = Vec::new();
+    for entry in read_dir {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == ".git" {
+            continue;
+        }
+        let child_path = if rel.is_empty() {
+            format!("/{name}")
+        } else {
+            format!("/{rel}/{name}")
+        };
+        entries.push(LocalDirEntry { name, path: child_path });
+    }
+    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(entries)
 }
 
 /// 作業ツリー/インデックスがHEADと異なる（未コミット変更のある）パス集合を返す。
@@ -238,7 +319,7 @@ mod tests {
     #[test]
     fn tracked_files_includes_nested_paths() {
         let dir = tmp_repo();
-        let mut files = tracked_files(dir.to_str().unwrap()).unwrap();
+        let mut files = tracked_files(dir.to_str().unwrap(), "/").unwrap();
         files.sort();
         assert_eq!(
             files,
@@ -247,6 +328,18 @@ mod tests {
                 "src/app.js".to_string(),
                 "src/lib/util.js".to_string(),
             ]
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn tracked_files_scoped_to_local_root() {
+        let dir = tmp_repo();
+        let mut files = tracked_files(dir.to_str().unwrap(), "/src").unwrap();
+        files.sort();
+        assert_eq!(
+            files,
+            vec!["app.js".to_string(), "lib/util.js".to_string()]
         );
         fs::remove_dir_all(&dir).ok();
     }

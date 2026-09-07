@@ -23,9 +23,16 @@ pub struct Profile {
     pub user: String,
     #[serde(default)]
     pub password: String,
+    /// このプロファイルに紐づくローカルGitリポジトリの絶対パス。未設定は空文字。
+    #[serde(default)]
+    pub repo_path: String,
     /// リモート側のデプロイ先ルート（例: /public_html）
     #[serde(default = "default_root")]
     pub remote_root: String,
+    /// ローカル側の同期起点（リポジトリルートからの相対パス、例: /wp-content）。
+    /// "/" またはリポジトリルートは「リポジトリ全体を同期対象にする」を意味する。
+    #[serde(default = "default_root")]
+    pub local_root: String,
 }
 
 fn default_root() -> String {
