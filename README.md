@@ -17,6 +17,22 @@ git-ftp のGUIツール。ローカルのGit差分を確認し、リモートサ
 
 > 初回（`.git-ftp.log` が無い）時は、`HEAD` の全追跡ファイルが「追加」として表示されます。
 
+## インストール（Homebrew）
+
+```bash
+brew tap kanda-ab-net/gitfling https://github.com/kanda-ab-net/gitfling
+brew install --cask gitfling
+```
+
+- 対応: Apple Silicon (arm64) macOS のみ
+- 署名・公証（notarization）は行っていないため、初回起動時に Gatekeeper の警告が出ます。
+  「システム設定 > プライバシーとセキュリティ」から「このまま開く」を選択するか、
+  ターミナルで `xattr -dr com.apple.quarantine /Applications/GitFling.app` を実行してください。
+
+新しいリリースの出し方は [`.github/workflows/release.yml`](.github/workflows/release.yml) を参照。
+`git tag vX.Y.Z && git push origin vX.Y.Z` で GitHub Actions が `.dmg` をビルドし、下書きリリースを作成します。
+公開後、[`Casks/gitfling.rb`](Casks/gitfling.rb) の `version` と `sha256`（`shasum -a 256 GitFling_X.Y.Z_aarch64.dmg`）を更新してください。
+
 ## 必要なもの（開発環境）
 
 - Node.js / npm
@@ -53,11 +69,11 @@ npm run tauri build
 
 ## 使い方
 
-1. 右上の **＋** でサーバープロファイルを作成（プロトコル/ホスト/ポート/ユーザー/パスワード/リモートルート）
-2. **📁 リポジトリを選択** でローカルのGitリポジトリを指定
-3. **🔌 接続** でサーバーに接続（リモートのファイル階層がツリー表示される）
-4. 左ペインでアップロードするファイルにチェック
-5. **⇧ アップロード** でデプロイ
+1. 右上の **＋** でサーバープロファイルを作成
+   （プロトコル/ホスト/ポート/ユーザー/パスワード/ローカルGitリポジトリ/ローカルの同期ベースフォルダ/リモートルート）
+2. **🔌 接続** でサーバーに接続（リモートのファイル階層がツリー表示される）
+3. 左ペインでアップロードするファイルにチェック
+4. **⇧ アップロード** でデプロイ
 
 ## デプロイ除外（.git-ftp-ignore）
 

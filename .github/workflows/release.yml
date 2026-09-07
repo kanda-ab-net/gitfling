@@ -1,0 +1,39 @@
+name: Release
+
+# タグ (v*) を push すると、macOS 用の .app / .dmg をビルドして
+# GitHub Releases に下書き（draft）として添付します。
+# 内容を確認して公開したら、Casks/gitfling.rb の version / sha256 を
+# 新しいリリースのものに更新してください。
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: ssh2 用に OpenSSL の場所を設定
+        run: |
+          brew install openssl@3
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "GitFling ${{ github.ref_name }}"
+          releaseDraft: true
+          prerelease: false
